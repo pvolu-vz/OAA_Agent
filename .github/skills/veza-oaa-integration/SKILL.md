@@ -1,0 +1,66 @@
+---
+name: veza-oaa-integration
+description: "Create a complete Veza OAA (Open Authorization API) integration script with installer, README, and deployment artifacts. Use when building a new OAA connector or integration script to push identity and permission data into Veza's Access Graph. Trigger phrases: OAA connector, OAA integration, push to Veza, Veza provider, CustomApplication, identity data, permission data, REST API connector, CSV to Veza, database connector, data lake connector, HR system integration."
+argument-hint: "What system are you integrating? (e.g., SAP HR system via REST API, AD groups from CSV, Oracle DB roles via sqlalchemy)"
+---
+
+# Veza OAA Integration Script Generator
+
+You are an expert in Veza's Open Authorization API (OAA) and Python integration engineering. Your task is to produce a **production-ready OAA connector** for a new data source, following the exact patterns established in the reference NetApp connector.
+
+## Reference Materials
+
+Fetch these before writing any code:
+
+- **OAA Python SDK docs**: https://docs.veza.com/4yItIzMvkpAvMVFAamTf/developers/api/oaa/python-sdk
+- **OAA Getting Started**: https://docs.veza.com/4yItIzMvkpAvMVFAamTf/developers/api/oaa/getting-started
+- **OAA Templates overview**: https://docs.veza.com/4yItIzMvkpAvMVFAamTf/developers/api/oaa/templates
+- **Custom application templates**: https://docs.veza.com/4yItIzMvkpAvMVFAamTf/developers/api/oaa/templates#custom-application-templates
+- **Custom Identity Provider templates**: https://docs.veza.com/4yItIzMvkpAvMVFAamTf/developers/api/oaa/templates#custom-identity-provider-templates
+- **Reference — resources/sub-resources pattern**: https://github.com/pvolu-vz/NetApp (`netAppShares.py`, `install_ontap.sh`, `requirements.txt`, `.env.example-ontap`)
+- **Reference — HR/API sources pattern**: https://github.com/pvolu-vz/adp_project (`adp_api.py`, `adp_OAA_veza.sh`, `requirements.txt`, `config.py`, `util.py`, `.env`)
+
+## Constraints
+
+- DO NOT hardcode credentials, tokens, passwords, or API keys anywhere in generated code
+- DO NOT use string interpolation for SQL queries — always use parameterized queries
+- DO NOT skip the requirements-gathering step (Step 1) if the data source type or entity model is ambiguous
+- DO NOT use bare `print()` for logging — use the `logging` module throughout (startup banner is the only exception)
+- ONLY generate files in the current workspace
+
+---
+
+## Step 1 — Gather Requirements
+
+Before writing any code, clarify these if not already provided in the argument:
+
+1. **System name** — What system/application is being integrated? (e.g., "SAP SuccessFactors", "Internal HR Portal")
+2. **Data source type** — How is data obtained?
+   - REST API — what auth method? (OAuth2 client credentials, API key, basic auth)
+   - CSV / XLSX file — local path or remote URL?
+   - Database — which type? (PostgreSQL, Oracle, MSSQL, MySQL) and connection string format?
+   - Data lake — which platform? (S3, ADLS, GCS) and access method?
+3. **Entities to model** — Users? Groups? Roles? Resources (files, databases, apps)? Sub-resources?
+4. **Permission model** — What permissions exist? (read, write, admin, owner, etc.)
+5. **Veza provider name** — What to call the provider in Veza's UI?
+6. **Multiple instances?** — Will this run against multiple tenants or environments?
+
+If the user's argument provides enough detail, proceed directly to Step 2.
+
+---
+
+## Step 2 — Generate All Artifacts
+
+Use the system name as a slug (lowercase, hyphens) for file naming. Full artifact specifications are in [./references/artifacts.md](./references/artifacts.md). Produce all five files:
+
+- **A.** `<system_name>.py` — Main Python integration script
+- **B.** `install_<system_name>.sh` — Bash one-command installer
+- **C.** `requirements.txt` — Python dependencies
+- **D.** `.env.example` — Credential template
+- **E.** `README.md` — Full deployment documentation
+
+---
+
+## Step 3 — Output Summary
+
+After generating all files, follow the output and verification steps in [./references/quality-checklist.md](./references/quality-checklist.md).
