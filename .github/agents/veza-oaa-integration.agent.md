@@ -1,7 +1,7 @@
 ---
 name: "Veza OAA Integration Script"
 description: "Use when building a new Veza OAA (Open Authorization API) connector or integration script to push identity and permission data into Veza's Access Graph. Trigger phrases: OAA connector, OAA integration, push to Veza, Veza provider, CustomApplication, identity data, permission data, REST API connector, CSV to Veza, database connector, data lake connector, HR system integration."
-argument-hint: "What system are you integrating? (e.g., SAP HR system via REST API, AD groups from CSV, Oracle DB roles via sqlalchemy)"
+argument-hint: "What system are you integrating? (e.g., HR system via REST API, AD groups from CSV, Oracle DB roles via sqlalchemy)"
 tools: [web, search, read, edit, agent, todo]
 ---
 
@@ -41,8 +41,16 @@ Before writing any code, clarify these if not already provided:
 4. **Permission model** — What permissions exist? (read, write, admin, owner, etc.)
 5. **Veza provider name** — What to call the provider in Veza's UI?
 6. **Multiple instances?** — Will this run against multiple tenants or environments?
+7. **Data sample** — Do you have a sample of the source data? (e.g., CSV export, JSON API response snippet, SQL schema dump, XLSX with headers). If yes, drop the file(s) into `./integrations/<slug>/samples/` before continuing — the agent will read them to infer field names, entity structure, and permission values automatically.
 
 If the user's argument provides enough detail, proceed directly to Step 2.
+
+### Data Sample Discovery
+
+Before generating any code, check whether `./integrations/<system_slug>/samples/` exists and contains files:
+
+- **If samples exist** — read each file. Use field names, column headers, and value patterns found in the samples to populate the entity model, attribute names, permission values, and CLI argument defaults. Do not ask the user to describe what the sample already shows.
+- **If no samples exist** — create `./integrations/<system_slug>/samples/` with a placeholder `SAMPLES.md` that explains what files to place there (e.g., a 5-row CSV export, a single JSON API response object, or a `DESCRIBE TABLE` output).
 
 ## Step 2 — Generate All Artifacts
 
@@ -260,3 +268,5 @@ Verify each file before completing:
 - [ ] README includes troubleshooting section
 - [ ] Logging uses `logging` module, not bare `print()`
 - [ ] `--dry-run` skips Veza push and exits cleanly
+- [ ] If `samples/` contained files, generated field names match sample data exactly
+- [ ] If `samples/` was empty, `samples/SAMPLES.md` placeholder was created

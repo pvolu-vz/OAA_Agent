@@ -34,3 +34,5 @@ Verify each file before marking the task complete:
 - [ ] README includes a troubleshooting section
 - [ ] Logging uses `logging` module throughout — no bare `print()` (startup banner excepted)
 - [ ] `--dry-run` skips Veza push and exits cleanly
+- [ ] If `samples/` contained files, generated field names match sample data exactly
+- [ ] If `samples/` was empty, `samples/SAMPLES.md` placeholder was created
