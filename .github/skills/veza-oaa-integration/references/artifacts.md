@@ -2,6 +2,8 @@
 
 This file contains the full specification for all five artifacts generated in Step 2.
 
+> **Note on data samples:** If `./integrations/<system_slug>/samples/` contains files, use them to infer field names, entity attributes, and permission values throughout all artifacts below. If the directory is empty or absent, create `./integrations/<system_slug>/samples/SAMPLES.md` explaining what files to place there (e.g., a 5-row CSV export, a single JSON API response, or a `DESCRIBE TABLE` output).
+
 ---
 
 ## A. Main Python Script — `<system_name>.py`
