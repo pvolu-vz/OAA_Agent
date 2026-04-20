@@ -103,11 +103,48 @@ set -euo pipefail
 ```
 
 The installer must:
-1. Detect Linux distro — support RHEL/CentOS/Fedora (`dnf`/`yum`) and Ubuntu/Debian (`apt`)
-2. Install: `git`, `curl`, `python3`, `python3-pip`, `python3-venv`
-3. Check Python ≥ 3.8 and exit with clear message if not met
-4. Clone/update the repository into `/opt/<system-slug>-veza/scripts/`
-5. Create this directory layout:
+1. Detect Linux distro — support RHEL/CentOS/Fedora (`dnf`/`yum`) and Ubuntu/Debian (`apt`). Also read `OS_ID` from `/etc/os-release` (`ID=` field) so Amazon Linux (`amzn`) can be handled specially.
+2. Install packages **one at a time with a pre-check**, never in a single bulk `dnf install` call — a conflict on one package (e.g. `curl`) will fail the entire command and block `git` from installing:
+   ```bash
+   _install_pkg() {
+       local pkg="$1"
+       case "${PKG_MGR}" in
+           dnf|yum) "${PKG_MGR}" install -y "${pkg}" >/dev/null ;;
+           apt-get) apt-get install -y "${pkg}" >/dev/null ;;
+       esac
+   }
+   command -v git     &>/dev/null || _install_pkg git
+   command -v python3 &>/dev/null || _install_pkg python3
+   python3 -m pip --version &>/dev/null || _install_pkg python3-pip
+   ```
+3. **`curl` on Amazon Linux** — `curl-minimal` is pre-installed and conflicts with full `curl`. Skip the curl install if `OS_ID=amzn` and curl is already present:
+   ```bash
+   if ! command -v curl &>/dev/null; then
+       [[ "${OS_ID}" == "amzn" ]] \
+           && warn "Skipping curl on Amazon Linux (curl-minimal conflict)" \
+           || _install_pkg curl
+   fi
+   ```
+4. **`python3-venv` on Amazon Linux 2023 / RHEL 9+** — `venv` is built into `python3`; `python3-venv` is not a separate package and `dnf` will error. Check first, and use `python3-virtualenv` as the fallback package name for dnf/yum:
+   ```bash
+   if ! python3 -m venv --help &>/dev/null; then
+       case "${PKG_MGR}" in
+           dnf|yum) _install_pkg python3-virtualenv ;;
+           apt-get) _install_pkg python3-venv ;;
+       esac
+   fi
+   ```
+5. Check Python ≥ 3.8 and exit with clear message if not met.
+6. **Clone with `GIT_TERMINAL_PROMPT=0`** — sparse-checkout flags (`--filter=blob:none --sparse`) trigger credential prompts even on public repos. Use a simple shallow clone into a temp dir, copy integration files, then clean up:
+   ```bash
+   tmp_dir=$(mktemp -d)
+   GIT_TERMINAL_PROMPT=0 git clone --branch "${BRANCH}" --depth 1 --single-branch \
+       "${REPO_URL}" "${tmp_dir}" || die "git clone failed"
+   cp -f "${tmp_dir}/${INTEGRATION_SUBDIR}"/*.py  "${SCRIPTS_DIR}/"
+   cp -f "${tmp_dir}/${INTEGRATION_SUBDIR}/requirements.txt" "${SCRIPTS_DIR}/"
+   rm -rf "${tmp_dir}"
+   ```
+7. Create this directory layout:
    ```
    /opt/VEZA/<system-slug>-veza/
    ├── scripts/
@@ -117,16 +154,20 @@ The installer must:
    │   └── venv/
    └── logs/
    ```
-6. Create a Python venv and install `requirements.txt`
-7. Prompt for credentials interactively (Veza URL, Veza API key, source credentials)
-8. Support non-interactive/CI mode via env vars:
+8. Create a Python venv and install `requirements.txt`.
+9. **Interactive prompts must use `/dev/tty`** — when the script runs via `curl | bash`, stdin is the pipe, not the terminal. All `read` calls must redirect from `/dev/tty`:
    ```bash
-   VEZA_URL=... VEZA_API_KEY=... SOURCE_API_URL=... SOURCE_API_KEY=... \
-   bash install_<system_name>.sh --non-interactive
+   IFS= read -r -p "Veza URL: " value </dev/tty
+   IFS= read -r -s -p "API key: " secret </dev/tty; echo >/dev/tty
    ```
-9. Generate `.env` with `chmod 600` and explanatory comments
-10. Accept flags: `--non-interactive`, `--overwrite-env`, `--install-dir <path>`, `--repo-url <url>`, `--branch <name>`
-11. Print final summary: install path, next steps, example run command
+10. Support non-interactive/CI mode via env vars:
+    ```bash
+    VEZA_URL=... VEZA_API_KEY=... SOURCE_API_URL=... SOURCE_API_KEY=... \
+    bash install_<system_name>.sh --non-interactive
+    ```
+11. Generate `.env` with `chmod 600` and explanatory comments.
+12. Accept flags: `--non-interactive`, `--overwrite-env`, `--install-dir <path>`, `--repo-url <url>`, `--branch <name>`
+13. Print final summary: install path, next steps, example run command.
 
 ---
 
@@ -192,3 +233,184 @@ Write comprehensive documentation covering all of the following sections:
 9. **Security Considerations** — credential rotation, file permissions, SELinux/AppArmor
 10. **Troubleshooting** — auth failures, connectivity issues, missing modules, Veza push warnings
 11. **Changelog** — v1.0 initial release
+
+---
+
+## F. Preflight Validation Script — `preflight_<system_name>.sh`
+
+A self-contained Bash script that validates every prerequisite before running `<system_name>.py`. It must be generated **by reading the Python script** — do not write it from a generic template. The validation logic must match what the script actually does.
+
+read this before creating the preflight script for your reference: - [https://github.com/pvolu-vz/NetApp (`install_ontap.sh`)](https://github.com/pvolu-vz/NetApp/blob/main/preflight.sh)
+
+### How to derive it from the Python script
+
+Before writing a single line of bash, read `<system_name>.py` and extract:
+
+| What to look for | Where in the Python script | What it drives |
+|---|---|---|
+| `import pyodbc` / `import psycopg2` / etc. | Top-level imports | Package checks + ODBC driver check |
+| `load_config()` dict keys and their `os.getenv()` names | `load_config()` function | `.env` variable list and required/optional status |
+| `conn_str` or connection URL construction | DB adapter or API session setup | Network connectivity test target and port |
+| `requests.get(url)` / `pyodbc.connect()` / `boto3` client | Data loading functions | Authentication test type (HTTP Bearer / DB login / SDK auth) |
+| `OAAClient(url=..., token=...)` | `push_to_veza()` | Veza HTTPS reachability + Bearer auth test |
+| `python3 --version` or version guards in the code | `sys.version_info` checks | Minimum Python version to enforce |
+| `from requirements.txt` | `requirements.txt` | Full package checklist |
+
+### Required validation sections
+
+Generate exactly these eight sections, in order:
+
+#### 1 — System Requirements
+- Python version: enforce the minimum from the script (check `sys.version_info` guards; default ≥ 3.9)
+- pip3 availability
+- Virtual environment detection (warn if not in one)
+- OS detection (Linux distro from `/etc/os-release`, macOS)
+- curl (required for API auth tests)
+- jq (optional, warn if missing)
+- **Data-source-specific system deps** — derive from imports:
+  - `pyodbc` → check for ODBC driver via `odbcinst -q -d`; warn with install URL if missing
+  - `psycopg2` → check PostgreSQL client libs (`pg_config` or `libpq`)
+  - `cx_Oracle` → check Oracle Instant Client (`oracle_config` or `LD_LIBRARY_PATH`)
+  - `boto3` → check AWS CLI config presence (optional)
+  - `azure-storage-blob` → no extra system dep
+  - REST/CSV → no extra system dep
+
+#### 2 — Python Dependencies
+- Read `requirements.txt` line by line and check each package with `python3 -c "import <pkg>"`
+- Print installed version alongside each ✓
+- Prefer the local `./venv/bin/python` if it exists; fall back to system `python3`
+- On failure, print the install command: `./venv/bin/pip install -r requirements.txt`
+
+#### 3 — Configuration File
+- Check `.env` exists; offer to generate a template (Option 10) if missing
+- Check file permissions — must be `600`; print `chmod 600` fix if not
+- `source` the `.env` file and validate each variable extracted from `load_config()`:
+  - **Required** — fail if empty or still a placeholder (`your_*`, `https://your-*`)
+  - **Optional** — `print_info` only
+  - **Sensitive** (`PASSWORD`, `KEY`, `TOKEN`, `SECRET`) — show only first 8 chars
+
+#### 4 — Network Connectivity
+Derive the test target and protocol from the Python script's connection logic:
+
+| Data source type | Protocol | How to detect |
+|---|---|---|
+| MS SQL Server / PostgreSQL / MySQL / Oracle | TCP to `$DB_HOST:$DB_PORT` | `conn_str` or `create_engine()` URL |
+| REST API | HTTPS to the API base URL | `requests.Session()` base URL |
+| Veza push | HTTPS to `$VEZA_URL:443` | Always present |
+| S3 / ADLS / GCS | HTTPS to the SDK endpoint | `boto3` / Azure SDK / GCS client |
+
+For TCP: use `nc -zw 5 $host $port` → fall back to `bash /dev/tcp/$host/$port` → fall back to `curl telnet://`.  
+For HTTPS: use `curl -s -o /dev/null -w "%{http_code}|%{time_total}" -m 10 https://$host`.
+
+#### 5 — API / Database Authentication
+Perform a live, minimal authenticated call to confirm credentials actually work:
+
+| Source type | Test call | Success indicator |
+|---|---|---|
+| MS SQL Server | `pyodbc.connect(conn_str); SELECT @@VERSION` | Row returned without exception |
+| PostgreSQL | `psycopg2.connect(...); SELECT version()` | Row returned |
+| MySQL | `pymysql.connect(...); SELECT VERSION()` | Row returned |
+| Oracle | `cx_Oracle.connect(...); SELECT banner FROM v$version` | Row returned |
+| REST API (Bearer) | `GET /api/health` or the first listed API endpoint | HTTP 200 |
+| REST API (Basic) | Same endpoint with Basic Auth header | HTTP 200 |
+| Veza | `GET https://$VEZA_URL/api/v1/providers` with Bearer token | HTTP 200 |
+
+For DB tests, run the Python snippet inline via a heredoc (`python3 - <<PYEOF`).  
+Print `[DEBUG]` lines showing the connection target and masked credentials before each test.
+
+#### 6 — API Endpoint Accessibility
+- Veza query endpoint: `POST https://$VEZA_URL/api/v1/assessments/query_spec:nodes` with a minimal `{"query":"nodes{InstanceId first:1}"}` body
+- Any additional endpoints the script reads from (e.g. REST API resource endpoints) — derive from `requests.get()` / `requests.post()` calls in the data-loading functions
+- Print full JSON response body (pretty-printed via `python3 -c "import sys,json; ..."`) on non-200 responses
+
+#### 7 — Deployment Structure
+- Main script (`<slug>.py`) exists, is readable, and is executable if it has a shebang
+- `requirements.txt` present
+- `logs/` directory exists and is writable (if not, note it will be auto-created on first run)
+- Current user — note if not running as the dedicated service account (warn, don't fail)
+- Recommended install path `/opt/VEZA/<slug>-veza/scripts/` — info if not there
+
+#### 8 — Summary
+```bash
+print_header "Validation Summary"
+echo -e "${GREEN}Passed:${NC}   $TESTS_PASSED"
+echo -e "${RED}Failed:${NC}   $TESTS_FAILED"
+echo -e "${YELLOW}Warnings:${NC} $TESTS_WARNING"
+```
+On zero failures: print the recommended dry-run command.  
+On any failure: print `"✗ Some checks failed. Please address the issues above before deployment."` and return exit code 1.
+
+### Standard utilities (always include)
+
+```bash
+# Colors
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; NC='\033[0m'; BOLD='\033[1m'
+
+# Counters — increment inside print_success/print_fail/print_warning
+TESTS_PASSED=0; TESTS_FAILED=0; TESTS_WARNING=0
+
+print_success() { echo -e "${GREEN}✓${NC} $1"; ((TESTS_PASSED++)); }
+print_fail()    { echo -e "${RED}✗${NC} $1";   ((TESTS_FAILED++));  }
+print_warning() { echo -e "${YELLOW}⚠${NC} $1"; ((TESTS_WARNING++)); }
+print_info()    { echo -e "${BLUE}ℹ${NC} $1"; }
+```
+
+### check_env_var helper
+
+```bash
+check_env_var() {
+    local var_name=$1 var_value=$2 optional=$3
+    if [[ -z "$var_value" ]]; then
+        [[ "$optional" == "optional" ]] && print_info "$var_name not set (optional)" \
+                                        || print_fail "$var_name is not set"
+    elif [[ "$var_value" =~ ^your_.* ]]; then
+        print_warning "$var_name contains placeholder value"
+    else
+        if [[ "$var_name" =~ PASSWORD|KEY|TOKEN|SECRET ]]; then
+            print_success "$var_name set (${var_value:0:8}...)"
+        else
+            print_success "$var_name set"
+        fi
+    fi
+}
+```
+
+### Interactive menu — 11 fixed options
+
+```
+1) System Requirements       7) Deployment Structure
+2) Python Dependencies       8) Run ALL Checks (recommended)
+3) Configuration File        9) Display Current Configuration
+4) Network Connectivity     10) Generate Template .env File
+5) API Authentication       11) Install Python Dependencies
+6) API Endpoint Access       0) Exit
+```
+
+Support `--all` flag for CI/non-interactive execution:
+```bash
+main() {
+    [[ "$1" == "--all" ]] && { run_all_checks; exit $?; }
+    # interactive menu loop ...
+}
+```
+
+### install_dependencies (Option 11)
+
+Always install into a local venv, not system Python:
+```bash
+VENV_DIR="${SCRIPT_DIR}/venv"
+[[ ! -d "$VENV_DIR" ]] && python3 -m venv "$VENV_DIR"
+"${VENV_DIR}/bin/pip" install -r "$REQUIREMENTS_FILE"
+```
+
+### generate_env_template (Option 10)
+
+Copy the contents of `.env.example` verbatim. Set `chmod 600` after writing.
+
+### Naming and placement
+
+- File: `./integrations/<slug>/preflight.sh`
+- Make executable: `chmod +x preflight.sh`
+- The script sets `SCRIPT_DIR` from `${BASH_SOURCE[0]}` so it works from any working directory
+- Log file: `${SCRIPT_DIR}/preflight_$(date +%Y%m%d_%H%M%S).log` — created at startup
